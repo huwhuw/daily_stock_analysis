@@ -43,7 +43,7 @@ def load_spot_data() -> pd.DataFrame:
     # 1) AkShare 东方财富
     if ak is not None:
         last_error = None
-        for i in range(3):
+        for i in range(1):
             try:
                 print(f"[数据源] 尝试 AkShare-东方财富，第 {i + 1} 次...")
                 df = ak.stock_zh_a_spot_em()
@@ -54,7 +54,7 @@ def load_spot_data() -> pd.DataFrame:
             except Exception as e:
                 last_error = e
                 print(f"[数据源] AkShare-东方财富 失败：{e}")
-                time.sleep(3)
+                time.sleep(1)
         print(f"[数据源] AkShare-东方财富 最终失败：{last_error}")
 
     # 2) Tushare rt_k
@@ -363,7 +363,7 @@ def main():
 
     data = normalize_columns(raw)
     data = add_ma_features(data)
-    result = filter_candidates(data, top_n=15)
+    result = filter_candidates(data, top_n=10)
     save_results(result)
     print("[主流程] 候选池生成完成。")
 
