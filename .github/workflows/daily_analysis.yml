@@ -61,7 +61,7 @@ jobs:
 
       - name: 合并持仓池与候选池
         env:
-          HOLDING_LIST: ${{ vars.HOLDING_LIST || secrets.HOLDING_LIST || '' }}
+          HOLDING_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '' }}
         run: |
           python - <<'PY'
           from pathlib import Path
