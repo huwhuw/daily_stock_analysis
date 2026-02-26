@@ -1,5 +1,5 @@
 import os
-import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -7,8 +7,17 @@ import pandas as pd
 try:
     import akshare as ak
 except ImportError:
-    print("akshare 未安装，请确认 requirements.txt 中包含 akshare")
-    sys.exit(1)
+    ak = None
+
+try:
+    import tushare as ts
+except ImportError:
+    ts = None
+
+try:
+    import efinance as ef
+except ImportError:
+    ef = None
 
 
 OUTPUT_DIR = Path("data")
@@ -25,58 +34,140 @@ def safe_num(series: pd.Series) -> pd.Series:
 
 def load_spot_data() -> pd.DataFrame:
     """
-    获取 A 股实时/当日快照。
-    优先使用东财接口快照。
+    多数据源兜底：
+    1. AkShare 东方财富
+    2. Tushare rt_k（需 TUSHARE_TOKEN 且有 rt_k 权限）
+    3. efinance
+    全部失败则返回空 DataFrame，不抛异常。
     """
-    df = ak.stock_zh_a_spot_em()
-    if df is None or df.empty:
-        raise RuntimeError("获取A股快照失败：stock_zh_a_spot_em 返回空数据")
-    return df
+    # 1) AkShare 东方财富
+    if ak is not None:
+        last_error = None
+        for i in range(3):
+            try:
+                print(f"[数据源] 尝试 AkShare-东方财富，第 {i + 1} 次...")
+                df = ak.stock_zh_a_spot_em()
+                if df is not None and not df.empty:
+                    print(f"[数据源] AkShare-东方财富 成功，记录数：{len(df)}")
+                    df["_source"] = "akshare_em"
+                    return df
+            except Exception as e:
+                last_error = e
+                print(f"[数据源] AkShare-东方财富 失败：{e}")
+                time.sleep(3)
+        print(f"[数据源] AkShare-东方财富 最终失败：{last_error}")
+
+    # 2) Tushare rt_k
+    tushare_token = os.environ.get("TUSHARE_TOKEN", "").strip()
+    if ts is not None and tushare_token:
+        try:
+            print("[数据源] 尝试 Tushare rt_k ...")
+            pro = ts.pro_api(tushare_token)
+            df = pro.rt_k(ts_code="3*.SZ,6*.SH,0*.SZ,9*.BJ")
+            if df is not None and not df.empty:
+                print(f"[数据源] Tushare rt_k 成功，记录数：{len(df)}")
+                df["_source"] = "tushare_rt_k"
+                return df
+            print("[数据源] Tushare rt_k 返回空数据")
+        except Exception as e:
+            print(f"[数据源] Tushare rt_k 失败：{e}")
+
+    # 3) efinance
+    if ef is not None:
+        try:
+            print("[数据源] 尝试 efinance 实时行情 ...")
+            df = ef.stock.get_realtime_quotes()
+            if df is not None and not df.empty:
+                print(f"[数据源] efinance 成功，记录数：{len(df)}")
+                df["_source"] = "efinance"
+                return df
+            print("[数据源] efinance 返回空数据")
+        except Exception as e:
+            print(f"[数据源] efinance 失败：{e}")
+
+    print("[数据源] 所有行情源都失败，返回空结果。")
+    return pd.DataFrame()
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    兼容 AkShare 常见中文列名，整理出统一字段。
+    兼容 AkShare / Tushare / efinance 的列名，整理成统一字段：
+    code, name, close, open, high, low, pct_change, turnover, turnover_rate, volume_ratio
     """
-    col_map = {}
+    if df is None or df.empty:
+        return pd.DataFrame()
 
-    # 常见字段映射（按 AkShare 常见返回）
-    for c in df.columns:
-        if c in ("代码", "symbol"):
-            col_map[c] = "code"
-        elif c in ("名称", "name"):
-            col_map[c] = "name"
-        elif c in ("最新价", "close", "最新"):
-            col_map[c] = "close"
-        elif c in ("今开", "open"):
-            col_map[c] = "open"
-        elif c in ("最高", "high"):
-            col_map[c] = "high"
-        elif c in ("最低", "low"):
-            col_map[c] = "low"
-        elif c in ("涨跌幅", "pct_chg"):
-            col_map[c] = "pct_change"
-        elif c in ("涨跌额",):
-            col_map[c] = "pct_amount"
-        elif c in ("成交量", "volume"):
-            col_map[c] = "volume"
-        elif c in ("成交额", "amount", "turnover"):
-            col_map[c] = "turnover"
-        elif c in ("换手率", "turnover_rate"):
-            col_map[c] = "turnover_rate"
-        elif c in ("量比", "volume_ratio"):
-            col_map[c] = "volume_ratio"
-        elif c in ("市盈率-动态", "市盈率动态", "pe"):
-            col_map[c] = "pe_dynamic"
+    source = df["_source"].iloc[0] if "_source" in df.columns and not df.empty else "unknown"
+    data = df.copy()
 
-    df = df.rename(columns=col_map)
+    if source == "akshare_em":
+        col_map = {
+            "代码": "code",
+            "名称": "name",
+            "最新价": "close",
+            "今开": "open",
+            "最高": "high",
+            "最低": "low",
+            "涨跌幅": "pct_change",
+            "涨跌额": "pct_amount",
+            "成交量": "volume",
+            "成交额": "turnover",
+            "换手率": "turnover_rate",
+            "量比": "volume_ratio",
+            "市盈率-动态": "pe_dynamic",
+            "市盈率动态": "pe_dynamic",
+        }
+        data = data.rename(columns=col_map)
 
-    required = ["code", "name", "close", "pct_change", "turnover", "turnover_rate"]
-    missing = [x for x in required if x not in df.columns]
-    if missing:
-        raise RuntimeError(f"快照字段缺失，无法继续筛选。缺失字段: {missing}")
+    elif source == "tushare_rt_k":
+        col_map = {
+            "ts_code": "code",
+            "name": "name",
+            "close": "close",
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "vol": "volume",
+            "amount": "turnover",
+        }
+        data = data.rename(columns=col_map)
 
-    # 数值化
+        if "pre_close" in data.columns:
+            data["pre_close"] = pd.to_numeric(data["pre_close"], errors="coerce")
+            data["close"] = pd.to_numeric(data["close"], errors="coerce")
+            data["pct_change"] = (data["close"] / data["pre_close"] - 1) * 100
+
+        data["code"] = (
+            data["code"].astype(str)
+            .str.replace(".SH", "", regex=False)
+            .str.replace(".SZ", "", regex=False)
+            .str.replace(".BJ", "", regex=False)
+        )
+
+        data["turnover_rate"] = pd.NA
+        data["volume_ratio"] = pd.NA
+        data["pe_dynamic"] = pd.NA
+
+    elif source == "efinance":
+        col_map = {
+            "股票代码": "code",
+            "股票名称": "name",
+            "最新价": "close",
+            "今开": "open",
+            "最高": "high",
+            "最低": "low",
+            "涨跌幅": "pct_change",
+            "成交量": "volume",
+            "成交额": "turnover",
+            "换手率": "turnover_rate",
+            "量比": "volume_ratio",
+            "动态市盈率": "pe_dynamic",
+        }
+        data = data.rename(columns=col_map)
+
+    else:
+        raise RuntimeError(f"未知数据源，无法标准化：{source}")
+
     numeric_cols = [
         "close",
         "open",
@@ -91,29 +182,30 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
         "pe_dynamic",
     ]
     for col in numeric_cols:
-        if col in df.columns:
-            df[col] = safe_num(df[col])
+        if col in data.columns:
+            data[col] = safe_num(data[col])
 
-    return df
+    required = ["code", "name", "close", "pct_change", "turnover"]
+    missing = [x for x in required if x not in data.columns]
+    if missing:
+        raise RuntimeError(f"标准化后字段缺失：{missing}")
+
+    return data
 
 
 def add_ma_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    用当日价格做一个近似版的短期趋势判断。
-    由于这里只拿到快照数据，不直接有历史K线，
-    为了在 GitHub Actions 里保持轻量，这里使用一个简化策略：
-    - 仅使用现价 + 涨跌幅做粗筛
-    - MA相关可以先留空，后续如果你愿意再升级成逐票历史K线版
-
-    当前最小可用版：
-    先用 close、涨跌幅、成交额、换手率、量比做第一轮。
+    当前最小可用版：先不做真实 MA 历史计算。
+    先用占位字段，后续可升级成逐票历史K线版。
     """
-    # 先默认占位，便于后续升级
+    if df.empty:
+        return df
+
     df["ma5"] = pd.NA
     df["ma10"] = pd.NA
     df["ma20"] = pd.NA
     df["bias_ma5"] = pd.NA
-    df["trend_ok"] = True  # 当前最小版先不做历史均线过滤，后续再升级
+    df["trend_ok"] = True
     return df
 
 
@@ -121,25 +213,28 @@ def filter_candidates(df: pd.DataFrame, top_n: int = 15) -> pd.DataFrame:
     """
     按你的风格做初筛。
     """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
     data = df.copy()
 
-    # 1) 基础过滤：去掉异常、ST、北交所（先简单处理）
-    data = data.dropna(subset=["code", "name", "close", "pct_change", "turnover", "turnover_rate"])
+    # 基础过滤
+    base_subset = ["code", "name", "close", "pct_change", "turnover"]
+    data = data.dropna(subset=base_subset)
 
     # 非 ST
     data = data[~data["name"].astype(str).str.contains("ST", na=False)]
 
-    # 剔除北交所（以 8 / 4 开头的代码常见于北交所/新三板风格，先简单排）
+    # 剔除北交所（简单过滤）
     data = data[~data["code"].astype(str).str.startswith(("8", "4"))]
 
-    # 2) 热度过滤
-    # 成交额单位通常是元，这里按 5亿过滤
+    # 成交额 >= 5亿
     data = data[data["turnover"] >= 5e8]
 
-    # 换手率 >= 3%
-    data = data[data["turnover_rate"] >= 3]
+    # 换手率 >= 3%（若无该列值，则放宽）
+    if "turnover_rate" in data.columns:
+        data = data[(data["turnover_rate"].isna()) | (data["turnover_rate"] >= 3)]
 
-    # 3) 强度过滤
     # 涨幅 2% ~ 7%
     data = data[(data["pct_change"] >= 2) & (data["pct_change"] <= 7)]
 
@@ -147,24 +242,34 @@ def filter_candidates(df: pd.DataFrame, top_n: int = 15) -> pd.DataFrame:
     if "volume_ratio" in data.columns:
         data = data[(data["volume_ratio"].isna()) | (data["volume_ratio"] >= 1.2)]
 
-    # 4) 趋势过滤（当前最小版先用 trend_ok 占位，后续升级历史均线）
+    # 趋势过滤（占位）
     if "trend_ok" in data.columns:
         data = data[data["trend_ok"] == True]  # noqa: E712
 
-    # 5) 打分（先按你风格做轻量排序）
-    # 更偏好：成交额大、涨幅适中、换手活跃、量比不低
+    if data.empty:
+        return pd.DataFrame()
+
+    # 打分
+    turnover_rate_score = (
+        data["turnover_rate"].fillna(3).clip(upper=20) * 1.5
+        if "turnover_rate" in data.columns
+        else 0
+    )
+    volume_ratio_score = (
+        data["volume_ratio"].fillna(1).clip(upper=3) * 5
+        if "volume_ratio" in data.columns
+        else 0
+    )
+
     data["score"] = (
         data["pct_change"].clip(upper=7).fillna(0) * 8
-        + data["turnover_rate"].clip(upper=20).fillna(0) * 1.5
+        + turnover_rate_score
         + data["turnover"].fillna(0).rank(pct=True) * 20
-        + (data["volume_ratio"].fillna(1).clip(upper=3) * 5 if "volume_ratio" in data.columns else 0)
+        + volume_ratio_score
     )
 
     data = data.sort_values(by="score", ascending=False)
-
-    # 6) 只取前 top_n
     result = data.head(top_n).copy()
-
     return result
 
 
@@ -172,19 +277,28 @@ def save_results(df: pd.DataFrame) -> None:
     """
     保存调试明细和最终候选代码列表。
     """
-    if df.empty:
+    if df is None or df.empty:
         OUTPUT_TXT.write_text("", encoding="utf-8")
-        df.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
+        pd.DataFrame().to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
         print("本次未筛出候选股。")
         return
 
-    # 保存调试表
-    debug_cols = [c for c in [
-        "code", "name", "close", "pct_change", "turnover", "turnover_rate", "volume_ratio", "score"
-    ] if c in df.columns]
+    debug_cols = [
+        c for c in [
+            "code",
+            "name",
+            "close",
+            "pct_change",
+            "turnover",
+            "turnover_rate",
+            "volume_ratio",
+            "score",
+            "_source",
+        ]
+        if c in df.columns
+    ]
     df[debug_cols].to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
 
-    # 保存代码列表（逗号分隔）
     codes = df["code"].astype(str).tolist()
     OUTPUT_TXT.write_text(",".join(codes), encoding="utf-8")
 
@@ -195,6 +309,13 @@ def save_results(df: pd.DataFrame) -> None:
 def main():
     print("开始生成今日候选池...")
     raw = load_spot_data()
+
+    if raw is None or raw.empty:
+        print("未获取到市场快照，本次候选池为空。")
+        OUTPUT_TXT.write_text("", encoding="utf-8")
+        pd.DataFrame().to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
+        return
+
     data = normalize_columns(raw)
     data = add_ma_features(data)
     result = filter_candidates(data, top_n=15)
