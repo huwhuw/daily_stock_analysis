@@ -55,7 +55,7 @@ jobs:
         env:
           TZ: Asia/Shanghai
         run: |
-          python scripts/generate_candidates.py
+          python scripts/generate_candidates.py || echo "候选池生成失败，继续仅分析持仓池"
           echo "今日候选池："
           cat data/candidates.txt || true
 
