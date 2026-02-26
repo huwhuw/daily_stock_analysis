@@ -56,8 +56,19 @@ jobs:
           TZ: Asia/Shanghai
         run: |
           python scripts/generate_candidates.py || echo "候选池生成失败，继续仅分析持仓池"
-          echo "今日候选池："
-          cat data/candidates.txt || true
+          echo "================ 候选池结果 ================"
+          if [ -f data/candidates.txt ] && [ -s data/candidates.txt ]; then
+            echo "已筛出候选股："
+            cat data/candidates.txt
+          else
+            echo "本次未筛出候选股。"
+          fi
+          echo "================ 候选池调试表 ================"
+          if [ -f data/candidates_debug.csv ]; then
+            cat data/candidates_debug.csv
+          else
+            echo "未生成 candidates_debug.csv"
+          fi
 
       - name: 合并持仓池与候选池
         env:
