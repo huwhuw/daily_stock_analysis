@@ -50,6 +50,14 @@ jobs:
       - name: 创建必要目录
         run: |
           mkdir -p data logs reports
+
+      - name: 生成今日候选池
+        env:
+          TZ: Asia/Shanghai
+        run: |
+          python scripts/generate_candidates.py
+          echo "今日候选池："
+          cat data/candidates.txt || true
       
       - name: 执行股票分析
         env:
