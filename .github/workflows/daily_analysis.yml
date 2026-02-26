@@ -79,7 +79,6 @@ jobs:
               if part:
                   items.extend([x.strip() for x in part.split(",") if x.strip()])
 
-          # 去重，保持顺序
           seen = []
           for x in items:
               if x not in seen:
@@ -90,7 +89,7 @@ jobs:
 
           github_env = os.environ.get("GITHUB_ENV")
           with open(github_env, "a", encoding="utf-8") as f:
-              f.write(f"FINAL_STOCK_LIST={final_list}\n")
+              f.write(f"STOCK_LIST={final_list}\n")
           PY
       
       - name: 执行股票分析
