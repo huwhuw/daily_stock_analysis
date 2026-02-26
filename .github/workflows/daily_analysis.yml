@@ -266,6 +266,7 @@ jobs:
           path: |
             reports/
             logs/
+            data/
           retention-days: 30
       
       - name: 显示运行结果
