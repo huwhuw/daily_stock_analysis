@@ -4,6 +4,9 @@ on:
   # 定时触发 - 每天北京时间 18:00 (UTC 10:00)
   schedule:
     - cron: '0 10 * * 1-5'     # 周一到周五，UTC 10:00 = 北京时间 18:00
+    - cron: '0 1 * * 1-5'    # 北京时间 09:00
+    - cron: '30 3 * * 1-5'   # 北京时间 11:30
+    - cron: '30 6 * * 1-5'   # 北京时间 14:30
   
   # 手动触发
   workflow_dispatch:
@@ -27,7 +30,7 @@ jobs:
   analyze:
     runs-on: ubuntu-latest
     # 添加超时限制，防止任务卡死
-    timeout-minutes: 30
+    timeout-minutes: 90
     
     steps:
       - name: 随机延迟（避免固定时间访问）
@@ -216,8 +219,23 @@ jobs:
           REALTIME_SOURCE_PRIORITY: ${{ vars.REALTIME_SOURCE_PRIORITY || 'tencent,akshare_sina,efinance,akshare_em' }}
           
         run: |
-          # 判断运行模式
-          MODE="${{ github.event.inputs.mode || 'full' }}"
+          # 手动运行时优先使用手动选择的 mode
+          MODE="${{ github.event.inputs.mode }}"
+
+          # 定时运行时，根据北京时间自动决定模式
+          if [ -z "$MODE" ]; then
+            BJ_HM=$(TZ='Asia/Shanghai' date '+%H:%M')
+
+            if [ "$BJ_HM" = "09:00" ]; then
+              MODE="stocks-only"
+            elif [ "$BJ_HM" = "11:30" ]; then
+              MODE="stocks-only"
+            elif [ "$BJ_HM" = "14:30" ]; then
+              MODE="full"
+            else
+              MODE="full"
+            fi
+          fi
           
           echo "=========================================="
           echo "🚀 A股自选股智能分析系统"
