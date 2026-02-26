@@ -95,9 +95,13 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     code, name, close, open, high, low, pct_change, turnover, turnover_rate, volume_ratio
     """
     if df is None or df.empty:
+        print("[标准化] 输入为空，返回空 DataFrame")
         return pd.DataFrame()
 
     source = df["_source"].iloc[0] if "_source" in df.columns and not df.empty else "unknown"
+    print(f"[标准化] 当前数据源：{source}")
+    print(f"[标准化] 原始列名：{list(df.columns)}")
+
     data = df.copy()
 
     if source == "akshare_em":
@@ -190,6 +194,12 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise RuntimeError(f"标准化后字段缺失：{missing}")
 
+    print(f"[标准化] 标准化后列名：{list(data.columns)}")
+    print(f"[标准化] 标准化后记录数：{len(data)}")
+    preview_cols = [c for c in ["code", "name", "close", "pct_change", "turnover", "turnover_rate", "volume_ratio"] if c in data.columns]
+    print("[标准化] 前5条预览：")
+    print(data[preview_cols].head(5).to_string(index=False))
+
     return data
 
 
@@ -199,6 +209,7 @@ def add_ma_features(df: pd.DataFrame) -> pd.DataFrame:
     先用占位字段，后续可升级成逐票历史K线版。
     """
     if df.empty:
+        print("[趋势] 输入为空，跳过 MA 占位")
         return df
 
     df["ma5"] = pd.NA
@@ -206,6 +217,7 @@ def add_ma_features(df: pd.DataFrame) -> pd.DataFrame:
     df["ma20"] = pd.NA
     df["bias_ma5"] = pd.NA
     df["trend_ok"] = True
+    print(f"[趋势] 已添加 MA 占位字段，记录数：{len(df)}")
     return df
 
 
@@ -214,39 +226,58 @@ def filter_candidates(df: pd.DataFrame, top_n: int = 15) -> pd.DataFrame:
     按你的风格做初筛。
     """
     if df is None or df.empty:
+        print("[筛选] 输入为空，直接返回空结果")
         return pd.DataFrame()
 
     data = df.copy()
+    print(f"[筛选] 原始记录数：{len(data)}")
 
     # 基础过滤
     base_subset = ["code", "name", "close", "pct_change", "turnover"]
     data = data.dropna(subset=base_subset)
+    print(f"[筛选] 去掉关键字段空值后：{len(data)}")
 
     # 非 ST
     data = data[~data["name"].astype(str).str.contains("ST", na=False)]
+    print(f"[筛选] 去掉 ST 后：{len(data)}")
 
     # 剔除北交所（简单过滤）
     data = data[~data["code"].astype(str).str.startswith(("8", "4"))]
+    print(f"[筛选] 去掉北交所后：{len(data)}")
 
     # 成交额 >= 5亿
     data = data[data["turnover"] >= 5e8]
+    print(f"[筛选] 成交额>=5亿 后：{len(data)}")
 
     # 换手率 >= 3%（若无该列值，则放宽）
     if "turnover_rate" in data.columns:
+        before = len(data)
         data = data[(data["turnover_rate"].isna()) | (data["turnover_rate"] >= 3)]
+        print(f"[筛选] 换手率>=3%（空值放行）后：{len(data)}（剔除 {before - len(data)}）")
+    else:
+        print("[筛选] 无 turn_over_rate 列，跳过换手率过滤")
 
     # 涨幅 2% ~ 7%
+    before = len(data)
     data = data[(data["pct_change"] >= 2) & (data["pct_change"] <= 7)]
+    print(f"[筛选] 涨幅 2%~7% 后：{len(data)}（剔除 {before - len(data)}）")
 
     # 量比 >= 1.2（若无量比列，则放宽）
     if "volume_ratio" in data.columns:
+        before = len(data)
         data = data[(data["volume_ratio"].isna()) | (data["volume_ratio"] >= 1.2)]
+        print(f"[筛选] 量比>=1.2（空值放行）后：{len(data)}（剔除 {before - len(data)}）")
+    else:
+        print("[筛选] 无 volume_ratio 列，跳过量比过滤")
 
     # 趋势过滤（占位）
     if "trend_ok" in data.columns:
+        before = len(data)
         data = data[data["trend_ok"] == True]  # noqa: E712
+        print(f"[筛选] trend_ok 过滤后：{len(data)}（剔除 {before - len(data)}）")
 
     if data.empty:
+        print("[筛选] 过滤后已无股票入围")
         return pd.DataFrame()
 
     # 打分
@@ -268,8 +299,18 @@ def filter_candidates(df: pd.DataFrame, top_n: int = 15) -> pd.DataFrame:
         + volume_ratio_score
     )
 
+    print("[筛选] 打分后 Top 10 预览：")
+    preview_cols = [c for c in ["code", "name", "pct_change", "turnover", "turnover_rate", "volume_ratio", "score"] if c in data.columns]
+    print(data.sort_values(by="score", ascending=False)[preview_cols].head(10).to_string(index=False))
+
     data = data.sort_values(by="score", ascending=False)
     result = data.head(top_n).copy()
+
+    print(f"[筛选] 最终入围 {len(result)} 只（top_n={top_n}）")
+    if not result.empty:
+        print("[筛选] 最终入围名单：")
+        print(result[[c for c in ["code", "name", "score"] if c in result.columns]].to_string(index=False))
+
     return result
 
 
@@ -280,7 +321,7 @@ def save_results(df: pd.DataFrame) -> None:
     if df is None or df.empty:
         OUTPUT_TXT.write_text("", encoding="utf-8")
         pd.DataFrame().to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
-        print("本次未筛出候选股。")
+        print("[输出] 本次未筛出候选股。")
         return
 
     debug_cols = [
@@ -302,8 +343,10 @@ def save_results(df: pd.DataFrame) -> None:
     codes = df["code"].astype(str).tolist()
     OUTPUT_TXT.write_text(",".join(codes), encoding="utf-8")
 
-    print(f"已筛出 {len(codes)} 只候选股：")
+    print(f"[输出] 已筛出 {len(codes)} 只候选股：")
     print(",".join(codes))
+    print(f"[输出] 候选池文件：{OUTPUT_TXT}")
+    print(f"[输出] 调试文件：{OUTPUT_CSV}")
 
 
 def main():
@@ -311,17 +354,18 @@ def main():
     raw = load_spot_data()
 
     if raw is None or raw.empty:
-        print("未获取到市场快照，本次候选池为空。")
+        print("[主流程] 未获取到市场快照，本次候选池为空。")
         OUTPUT_TXT.write_text("", encoding="utf-8")
         pd.DataFrame().to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
+        print(f"[主流程] 已写出空候选池文件：{OUTPUT_TXT}")
+        print(f"[主流程] 已写出空调试文件：{OUTPUT_CSV}")
         return
 
     data = normalize_columns(raw)
     data = add_ma_features(data)
     result = filter_candidates(data, top_n=15)
     save_results(result)
-    print(f"候选池文件已写入：{OUTPUT_TXT}")
-    print(f"调试文件已写入：{OUTPUT_CSV}")
+    print("[主流程] 候选池生成完成。")
 
 
 if __name__ == "__main__":
