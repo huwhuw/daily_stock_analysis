@@ -54,6 +54,7 @@ jobs:
       - name: 生成今日候选池
         env:
           TZ: Asia/Shanghai
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: |
           python scripts/generate_candidates.py || echo "候选池生成失败，继续仅分析持仓池"
           echo "================ 候选池结果 ================"
